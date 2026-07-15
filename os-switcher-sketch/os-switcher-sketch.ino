@@ -16,14 +16,24 @@
  * (HID boot-protocol), который понимает хост ещё до загрузки ОС.
  *
  * Индикация: задний RX-светодиод Pro Micro (пин 17, инвертированный: LOW = горит).
+ *
+ * КНОПКА-ПЕРЕКЛЮЧАТЕЛЬ: двухпозиционный выключатель между пином D2 и GND
+ * (полярность не важна, внешний резистор не нужен — пин подтянут внутренним
+ * pull-up). Включена (замкнута) — нажимаем только Enter (первый пункт меню);
+ * выключена (разомкнута) — 4 x "вниз" + Enter (альтернативная ОС).
+ * Положение читается в конце 15-секундного мигания, так что переключать
+ * можно, пока мигает светодиод.
  */
 
 #include <HID-Project.h>
 
+// Пин выключателя: второй контакт кнопки — на GND.
+const int SWITCH_PIN = 2;
+
 // Пауза после энумерации USB и до нажатий. Энумерация происходит в раннем POST,
 // а меню GRUB появляется позже — эту задержку надо подобрать так, чтобы нажатия
 // попали в уже показанное меню GRUB, но раньше его таймаута.
-const unsigned long INPUT_DELAY_MS = 30000UL;  // 30 секунд
+const unsigned long INPUT_DELAY_MS = 15000UL;  // 15 секунд
 
 // Период мигания индикаторного светодиода (полупериод), мс.
 const unsigned long BLINK_HALF_PERIOD_MS = 500UL;
@@ -32,18 +42,17 @@ const unsigned long BLINK_HALF_PERIOD_MS = 500UL;
 // сбрасывает USB-шину и заново энумерирует клавиатуру — без локаута этот сброс
 // перевзводил бы триггер и запускал вторую итерацию уже в загруженной ОС.
 // Сбросы шины в течение этого времени после нажатий игнорируются.
-// Ядро сбрасывает шину обычно через 5-15 с после Enter в GRUB, 30 с хватает
-// с запасом; меньше ставить рискованно.
-const unsigned long REARM_LOCKOUT_MS = 30000UL;  // 30 секунд
+// Ядро сбрасывает шину обычно через 5-15 с после Enter в GRUB — 15 с впритык:
+// если на этой машине сброс придёт позже, вернётся вторая итерация.
+const unsigned long REARM_LOCKOUT_MS = 15000UL;  // 15 секунд
 
-void sendKeys() {
-  // 4 нажатия клавиши "вниз"
-  for (int i = 0; i < 4; i++) {
+// downPresses нажатий "вниз", затем Enter.
+void sendKeys(int downPresses) {
+  for (int i = 0; i < downPresses; i++) {
     BootKeyboard.write(KEY_DOWN_ARROW);
     delay(30);
   }
 
-  // В конце — Enter
   BootKeyboard.write(KEY_ENTER);
 }
 
@@ -59,8 +68,15 @@ void blinkingDelay() {
   digitalWrite(LED_BUILTIN_RX, HIGH);  // выключить
 }
 
+// Кнопка замкнута на GND = LOW (пин подтянут к HIGH внутренним pull-up).
+bool switchIsOn() {
+  return digitalRead(SWITCH_PIN) == LOW;
+}
+
 void setup() {
   BootKeyboard.begin();
+
+  pinMode(SWITCH_PIN, INPUT_PULLUP);
 
   // На Pro Micro нет светодиода на пине 13 — используем задний RX-светодиод.
   pinMode(LED_BUILTIN_RX, OUTPUT);
@@ -92,7 +108,9 @@ void loop() {
   if (armed && !USBDevice.isSuspended()) {
     armed = false;
     blinkingDelay();
-    sendKeys();
+    // Кнопка включена — только Enter (первый пункт меню);
+    // выключена — 4 x "вниз" + Enter (альтернативная ОС).
+    sendKeys(switchIsOn() ? 0 : 4);
     hasFired = true;
     lastFiredAt = millis();  // локаут отсчитываем от момента нажатий
   }
