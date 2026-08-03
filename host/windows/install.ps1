@@ -20,6 +20,7 @@ $TaskName = 'os-switcher-rebootd'
 $InstallDir = Join-Path $env:LOCALAPPDATA 'os-switcher'
 $ScriptName = 'os-switcher-rebootd.ps1'
 $Target = Join-Path $InstallDir $ScriptName
+$Launcher = Join-Path $InstallDir 'run-hidden.vbs'   # скрытый запуск, см. ниже
 
 function Remove-Task {
     $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
@@ -55,11 +56,24 @@ if (-not (Test-Path $InstallDir)) {
 Copy-Item $source $Target -Force
 Write-Host "Демон установлен: $Target"
 
+# 1a. VBS-лаунчер: запускает демон полностью скрыто. powershell.exe -WindowStyle
+#     Hidden всё равно мигает (а то и оставляет) консольное окно при старте
+#     задачи — окно создаётся раньше, чем применяется Hidden. WScript.Shell.Run с
+#     режимом окна 0 создаёт процесс сразу без окна: ни вспышки, ни окна.
+#     Третий аргумент True — wscript ждёт демон, поэтому задача остаётся Running
+#     (иначе сорвались бы перезапуск при сбое и защита от второго экземпляра).
+$vbs = @"
+Set sh = CreateObject("WScript.Shell")
+sh.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ""$Target""", 0, True
+"@
+Set-Content -Path $Launcher -Value $vbs -Encoding Default
+Write-Host "Лаунчер установлен: $Launcher"
+
 # 2. Перерегистрировать задачу автозапуска.
 Remove-Task
 
-$action = New-ScheduledTaskAction -Execute 'powershell.exe' `
-    -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$Target`""
+# Запуск через wscript + VBS-лаунчер (см. выше) — чтобы не мелькало окно.
+$action = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "`"$Launcher`""
 
 $user = "$env:USERDOMAIN\$env:USERNAME"
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user

@@ -37,7 +37,7 @@ $LogMaxBytes = 1MB
 # прописанным System.AppUserModel.ID, а это возня с IPropertyStore из COM.
 # Цена — в уведомлении будет значок и подпись «Windows PowerShell».
 $AppId = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
-$ToastTag = 'os-switcher'
+$ToastTagBase = 'os-switcher'   # к нему добавляется номер сессии: os-switcher-<N>
 $ToastGroup = 'os-switcher'
 
 function Write-Log([string]$Message) {
@@ -62,8 +62,11 @@ function Write-Log([string]$Message) {
 
 $script:ToastReady = $null   # $null — ещё не пробовали, $false — не завелось
 $script:ToastNotifier = $null
-$script:CountdownToast = $null
-$script:ToastSeq = 0
+$script:CountdownToast = $null   # текущая живая плашка (отсчёт или итог)
+$script:ToastSeq = 0             # версия NotificationData (растёт при каждом Update)
+$script:SessionSeq = 0           # номер сессии → уникальный Tag, чтобы баннер всплывал
+$script:LiveTag = $null          # Tag текущей плашки
+$script:SessionActive = $false   # идёт ли сейчас сессия (от COUNTDOWN до итога)
 
 function Initialize-Toast {
     if ($null -ne $script:ToastReady) { return $script:ToastReady }
@@ -90,30 +93,34 @@ function New-ToastData([string]$Body) {
     return [Windows.UI.Notifications.NotificationData]::new($values, $script:ToastSeq)
 }
 
-# Текст, который подставляется прямо в XML тоста (в отличие от {body}, который
-# идёт через NotificationData). Может прилететь из сообщения об ошибке, где
-# вполне бывают & и <, а на них LoadXml падает.
-function Get-XmlSafe([string]$Text) {
-    return $Text.Replace('&', '&amp;').Replace('<', '&lt;').Replace('>', '&gt;')
-}
-
-function Show-Countdown([int]$SecondsLeft) {
+# Одна живая плашка на всю сессию — и отсчёт, и итог. $NewSession=$true —
+# показать свежий баннер (всплывает); $false — обновить текущий на месте (тихо).
+function Show-Toast([string]$Body, [bool]$NewSession) {
     if (-not (Initialize-Toast)) { return }
-    $body = "Перезагрузка через $SecondsLeft с.`nВерни выключатель, чтобы отменить."
     try {
-        if ($script:CountdownToast) {
-            # Сравниваем со строкой, а не с членом enum: тип
-            # NotificationUpdateResult пришлось бы отдельно подгружать.
-            $res = $script:ToastNotifier.Update((New-ToastData $body), $ToastTag, $ToastGroup)
+        if (-not $NewSession -and $script:CountdownToast) {
+            # Обновление на месте по тегу текущей сессии. Сравниваем со строкой,
+            # а не с членом enum: тип NotificationUpdateResult пришлось бы
+            # отдельно подгружать.
+            $res = $script:ToastNotifier.Update((New-ToastData $Body), $script:LiveTag, $ToastGroup)
             if ("$res" -eq 'Succeeded') { return }
-            # Тост успел исчезнуть (истёк duration) или его закрыли — покажем заново.
-            $script:CountdownToast = $null
+            # Плашка истекла (duration) или её закрыли — покажем свежую ниже.
         }
 
-        # duration='long' держит уведомление на экране ~25 секунд. Отсчёт короче
-        # (10 с), но если REBOOT_HOLD_MS в скетче задрать выше — тост исчезнет
-        # раньше конца; Update() вернёт NotificationNotFound, и мы создадим
-        # новый (ветка выше).
+        # Свежий баннер. Каждой сессии — свой Tag: Windows дедуплицирует тосты по
+        # паре Tag+Group и глушит повторный Show() с тем же тегом (кладёт в Центр
+        # уведомлений без всплытия, пока тег не «забудется» — те самые ~10 с).
+        # Новый тег на сессию => баннер всплывает всегда.
+        if ($script:CountdownToast) {
+            try { $script:ToastNotifier.Hide($script:CountdownToast) } catch { }
+        }
+        $script:SessionSeq++
+        $script:LiveTag = '{0}-{1}' -f $ToastTagBase, $script:SessionSeq
+
+        # duration='long' держит уведомление на экране ~25 секунд. Текст идёт
+        # через data binding ({body} + NotificationData), поэтому & и < в теле
+        # (например в сообщении об ошибке) экранировать не нужно — LoadXml их не
+        # видит.
         $xml = [Windows.Data.Xml.Dom.XmlDocument]::new()
         $xml.LoadXml(@"
 <toast duration='long'>
@@ -126,9 +133,9 @@ function Show-Countdown([int]$SecondsLeft) {
 </toast>
 "@)
         $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
-        $toast.Tag = $ToastTag
+        $toast.Tag = $script:LiveTag
         $toast.Group = $ToastGroup
-        $toast.Data = New-ToastData $body
+        $toast.Data = New-ToastData $Body
         $script:ToastNotifier.Show($toast)
         $script:CountdownToast = $toast
     } catch {
@@ -136,33 +143,27 @@ function Show-Countdown([int]$SecondsLeft) {
     }
 }
 
-function Hide-Countdown {
-    if (-not $script:CountdownToast) { return }
-    try { $script:ToastNotifier.Hide($script:CountdownToast) } catch { }
-    $script:CountdownToast = $null
+# Тик отсчёта. Первый тик новой сессии всплывает свежим баннером, дальше та же
+# плашка обновляется на месте.
+function Show-Countdown([int]$SecondsLeft) {
+    $body = "Перезагрузка через $SecondsLeft с.`nВерни выключатель, чтобы отменить."
+    Show-Toast $body (-not $script:SessionActive)
+    $script:SessionActive = $true
 }
 
-# Заменить отсчёт коротким итоговым уведомлением («Отменено», «Перезагружаюсь»).
-function Show-Result([string]$Body) {
-    Hide-Countdown
-    if (-not (Initialize-Toast)) { return }
-    try {
-        $safeBody = Get-XmlSafe $Body
-        $xml = [Windows.Data.Xml.Dom.XmlDocument]::new()
-        $xml.LoadXml(@"
-<toast>
-  <visual>
-    <binding template='ToastGeneric'>
-      <text>$Title</text>
-      <text>$safeBody</text>
-    </binding>
-  </visual>
-</toast>
-"@)
-        $script:ToastNotifier.Show([Windows.UI.Notifications.ToastNotification]::new($xml))
-    } catch {
-        Write-Log "уведомление не показалось: $($_.Exception.Message)"
+function Hide-Countdown {
+    if ($script:CountdownToast) {
+        try { $script:ToastNotifier.Hide($script:CountdownToast) } catch { }
+        $script:CountdownToast = $null
     }
+    $script:SessionActive = $false
+}
+
+# Заменить отсчёт коротким итогом («Отменено», «Перезагружаюсь»). Пока сессия
+# жива — меняем ту же плашку на месте; иначе показываем отдельным баннером.
+function Show-Result([string]$Body) {
+    Show-Toast $Body (-not $script:SessionActive)
+    $script:SessionActive = $false
 }
 
 # --- порт и перезагрузка --------------------------------------------------
