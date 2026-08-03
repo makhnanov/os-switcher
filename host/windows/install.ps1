@@ -1,4 +1,4 @@
-# Установка os-switcher-rebootd в Windows: копирует демон в профиль
+﻿# Установка os-switcher-rebootd в Windows: копирует демон в профиль
 # пользователя и вешает его на автозапуск при входе в систему.
 #
 #   powershell -ExecutionPolicy Bypass -File install.ps1     # поставить

@@ -1,4 +1,4 @@
-# os-switcher-rebootd для Windows — то же, что host/linux/os-switcher-rebootd.py:
+﻿# os-switcher-rebootd для Windows — то же, что host/linux/os-switcher-rebootd.py:
 # слушает USB-serial платы, показывает обратный отсчёт в уведомлении и по
 # строке "REBOOT" перезагружает машину.
 #
