@@ -1,0 +1,6 @@
+# Не давать ModemManager лезть в порт платы своими AT-командами: он считает
+# любой ttyACM кандидатом в модемы (ID_MM_CANDIDATE=1) и может мешать и работе
+# сервиса, и прошивке.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2341", ATTRS{idProduct}=="8036", ENV{ID_MM_DEVICE_IGNORE}="1"
+# Тот же чип в режиме загрузчика (во время прошивки).
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2341", ATTRS{idProduct}=="0036", ENV{ID_MM_DEVICE_IGNORE}="1"

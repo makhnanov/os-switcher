@@ -1,0 +1,13 @@
+[Unit]
+Description=os-switcher: перезагрузка по щелчку выключателя выбора ОС
+Documentation=https://github.com/RomaxaCoder/os-switcher
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/os-switcher-rebootd
+# Плату могут выдернуть, а порт — пропасть при прошивке: просто поднимаемся снова.
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
