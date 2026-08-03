@@ -1,6 +1,6 @@
 [Unit]
 Description=os-switcher: перезагрузка по щелчку выключателя выбора ОС
-Documentation=https://github.com/RomaxaCoder/os-switcher
+Documentation=https://github.com/makhnanov/os-switcher
 
 [Service]
 Type=simple
