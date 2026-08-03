@@ -4,6 +4,8 @@
 (Arduino Pro Micro) прикидывается USB-клавиатурой и в нужный момент сама
 нажимает стрелки «вниз» и Enter, выбирая нужную ОС в GRUB без участия человека.
 
+Установка — [INSTALL.md](INSTALL.md). Здесь дальше — как оно устроено и почему.
+
 ## Как это работает
 
 - Pro Micro (чип ATmega32u4) имеет аппаратный USB и умеет представляться
@@ -82,46 +84,46 @@
 Длительность отсчёта задаёт **плата** (`REBOOT_HOLD_MS`), хост её не знает и
 берёт из аргумента `COUNTDOWN` — менять время надо в скетче, в одном месте.
 
-Уведомления показываются через `notify-send`. Сервис работает от root, а шина
+Уведомления в Linux показываются через `notify-send`. Сервис работает от root, а шина
 уведомлений живёт в сессии пользователя, поэтому активная графическая сессия
 ищется через `loginctl` (`Active=yes`, `Type=x11|wayland`) и `notify-send`
 запускается от её владельца. Сессия перепроверяется в начале каждого отсчёта —
 на момент старта сервиса (загрузка) её ещё может не быть. Нет сессии или нет
 `notify-send` — сервис работает молча, перезагрузка всё равно отрабатывает.
 
+В Windows то же самое делается toast-уведомлением: тост создаётся с data
+binding, а раз в секунду `ToastNotifier.Update()` подменяет в нём текст по
+тегу — прямой аналог `notify-send -r <id>`. Тосты показываются от имени
+готового AppUserModelID Windows PowerShell (свой потребовал бы ярлыка в меню
+«Пуск» с прописанным `System.AppUserModel.ID`), поэтому в углу уведомления
+будет подпись «Windows PowerShell». Не поднялся toast-API — демон так же
+работает молча, а причина уходит в
+`%LOCALAPPDATA%\os-switcher\rebootd.log`.
+
 Слежение **выключено**, когда следить незачем: ПК спит (`isSuspended()`),
 выключен/перезагружается (`!configured()`) и пока идёт 15-секундное ожидание
 GRUB. Поэтому щелчок во время мигания перед выбором пункта меню перезагрузку
 не заказывает — он уже учтён самим выбором ОС.
 
-### Установка сервиса (Linux)
+### Сервисы на хосте
+
+Перезагрузку исполняет сервис, свой в каждой ОС. Ставится отдельно от прошивки:
 
 ```bash
-sudo apt install python3-serial   # если ещё нет
-make install-service              # спросит sudo
-make service-logs                 # проверить, что порт нашёлся
+make install-service      # Linux (systemd + правило udev)
 ```
 
-`make install-service` кладёт `/usr/local/bin/os-switcher-rebootd`, юнит
-systemd и правило udev, которое запрещает ModemManager лезть в порт платы
-своими AT-командами (по умолчанию он считает любой `ttyACM` кандидатом в
-модемы). Снять всё — `make uninstall-service`.
-
-Проверить, не перезагружая машину (сервис при этом должен быть остановлен,
-иначе порт занят):
-
-```bash
-sudo systemctl stop os-switcher-rebootd
-OS_SWITCHER_REBOOT_CMD="echo ПЕРЕЗАГРУЗКА-БЫЛА-БЫ-ЗДЕСЬ" python3 host/os-switcher-rebootd.py
-# щёлкни выключателем и подожди 10 секунд
+```powershell
+powershell -ExecutionPolicy Bypass -File host\windows\install.ps1   # Windows
 ```
 
-### Установка сервиса (Windows)
+Windows-версия работает **от пользователя**, а не службой от SYSTEM: тосты
+живут в сессии пользователя, из сессии 0 их не показать, а перезагрузить
+машину интерактивный пользователь может и без прав администратора. Поэтому
+она ставится задачей планировщика «при входе в систему» — и, соответственно,
+не сработает, пока никто не залогинен. На живой Windows-машине не проверялась.
 
-Аналог на PowerShell — `host/os-switcher-rebootd.ps1`, ставится задачей
-планировщика от SYSTEM на автозапуск (команда — в шапке самого скрипта).
-На живой Windows-машине не проверялся: при первом запуске стоит прогнать
-скрипт руками и убедиться, что COM-порт находится.
+Пошагово, с проверками и разбором частых граблей, — в [INSTALL.md](INSTALL.md).
 
 ### Предупреждение: доверие к плате ничем не подтверждается
 
@@ -149,11 +151,13 @@ OS_SWITCHER_REBOOT_CMD="echo ПЕРЕЗАГРУЗКА-БЫЛА-БЫ-ЗДЕСЬ" 
 
 ## Файлы
 
+- `INSTALL.md` — пошаговая установка.
 - `os-switcher-sketch/os-switcher-sketch.ino` — скетч.
-- `host/os-switcher-rebootd.py` — сервис для Linux, слушает порт платы.
-- `host/os-switcher-rebootd.service` — юнит systemd для него.
-- `host/99-os-switcher.rules` — правило udev (ModemManager, руки прочь).
-- `host/os-switcher-rebootd.ps1` — то же самое для Windows.
+- `host/linux/os-switcher-rebootd.py` — сервис для Linux, слушает порт платы.
+- `host/linux/os-switcher-rebootd.service` — юнит systemd для него.
+- `host/linux/99-os-switcher.rules` — правило udev (ModemManager, руки прочь).
+- `host/windows/os-switcher-rebootd.ps1` — то же самое для Windows.
+- `host/windows/install.ps1` — установка/удаление Windows-версии (`-Uninstall`).
 - Библиотека `HID-Project` должна лежать в `~/Arduino/libraries/HID-Project`.
 
 ## Сборка и прошивка

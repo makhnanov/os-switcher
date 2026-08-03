@@ -55,9 +55,9 @@ clean:
 install-service:
 	@python3 -c "import serial" 2>/dev/null || { \
 		echo "Нужен pyserial: sudo apt install python3-serial"; exit 1; }
-	sudo install -m 755 host/os-switcher-rebootd.py /usr/local/bin/$(SERVICE)
-	sudo install -m 644 host/os-switcher-rebootd.service /etc/systemd/system/$(SERVICE).service
-	sudo install -m 644 host/99-os-switcher.rules /etc/udev/rules.d/99-os-switcher.rules
+	sudo install -m 755 host/linux/os-switcher-rebootd.py /usr/local/bin/$(SERVICE)
+	sudo install -m 644 host/linux/os-switcher-rebootd.service /etc/systemd/system/$(SERVICE).service
+	sudo install -m 644 host/linux/99-os-switcher.rules /etc/udev/rules.d/99-os-switcher.rules
 	sudo udevadm control --reload-rules
 	sudo udevadm trigger --subsystem-match=tty
 	sudo systemctl daemon-reload
