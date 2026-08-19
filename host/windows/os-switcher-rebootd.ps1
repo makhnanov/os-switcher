@@ -21,9 +21,17 @@
 # прогнать руками в консоли (.\os-switcher-rebootd.ps1) и посмотреть, что порт
 # находится и уведомление появляется.
 
+[CmdletBinding()]
+param(
+    # Порт можно задать руками: .\os-switcher-rebootd.ps1 -PortName COM3
+    # Нужно, если автоопределение не справилось (см. Find-BoardPort).
+    [string]$PortName
+)
+
 $ErrorActionPreference = 'Stop'
 
 $HardwareId = 'VID_2341&PID_8036'   # Arduino Leonardo / Pro Micro со скетчем
+$ProductName = 'os-switcher'        # iProduct из USB-дескриптора, см. README
 $Baud = 9600                        # не 1200: 1200 бод перезагружает плату в загрузчик
 $RetrySec = 3
 $ReadTimeoutMs = 1000               # он же шаг обновления отсчёта в уведомлении
@@ -42,7 +50,11 @@ $ToastGroup = 'os-switcher'
 
 function Write-Log([string]$Message) {
     $line = '{0} os-switcher-rebootd: {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Message
-    Write-Output $line
+    # Write-Host, а не Write-Output: вывод в конвейер стал бы частью
+    # возвращаемого значения той функции, из которой позвали лог. Find-BoardPort
+    # и пишет в лог, и возвращает имя порта — с Write-Output она вернула бы
+    # [строка лога, "COM3"], и открытие порта падало бы на приведении типа.
+    Write-Host $line
     try {
         $dir = Split-Path -Parent $LogFile
         if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
@@ -53,6 +65,19 @@ function Write-Log([string]$Message) {
     } catch {
         # Лог — вещь необязательная, из-за него падать не будем.
     }
+    # Обычное событие снимает глушитель Write-LogOnce: следующее ожидание
+    # опишется заново, даже если текст тот же, что был до него.
+    $script:LastRepeated = ''
+}
+
+# Для состояний, которые повторяются каждые $RetrySec: «жду плату», «порт занят».
+# Писать их каждый раз нельзя — за ночь с выдернутой платой лог вырастает на
+# мегабайты и ротация съедает всё, что было до. Пишем только смену состояния.
+$script:LastRepeated = ''
+function Write-LogOnce([string]$Message) {
+    if ($Message -eq $script:LastRepeated) { return }
+    Write-Log $Message
+    $script:LastRepeated = $Message   # после Write-Log: он глушитель и сбрасывает
 }
 
 # --- уведомления ----------------------------------------------------------
@@ -168,12 +193,69 @@ function Show-Result([string]$Body) {
 
 # --- порт и перезагрузка --------------------------------------------------
 
+# Плату ищем по VID:PID и имени. Одного HardwareId мало: рядом воткнут
+# off-screen, и VID:PID у него ровно тот же (2341:8036) — различает их только
+# iProduct из USB-дескриптора, который прошивка ставит через
+# --build-property build.usb_product.
+#
+# В Windows оно лежит в свойстве DEVPKEY_Device_BusReportedDeviceDesc — это
+# аналог пути by-id в Linux, и ломается он от того же самого.
+function Get-BusReportedName($device) {
+    try {
+        $prop = Get-PnpDeviceProperty -InstanceId $device.PNPDeviceID `
+            -KeyName 'DEVPKEY_Device_BusReportedDeviceDesc' -ErrorAction Stop
+        if ($prop -and $prop.Data) { return [string]$prop.Data }
+    } catch {
+        # Свойство может быть недоступно — тогда просто нет имени.
+    }
+    return $null
+}
+
 function Find-BoardPort {
-    $dev = Get-CimInstance Win32_PnPEntity |
-        Where-Object { $_.PNPDeviceID -like "*$HardwareId*" -and $_.Name -match '\(COM\d+\)' } |
-        Select-Object -First 1
-    if ($null -eq $dev) { return $null }
-    if ($dev.Name -match '\((COM\d+)\)') { return $Matches[1] }
+    $candidates = @(Get-CimInstance Win32_PnPEntity |
+        Where-Object { $_.PNPDeviceID -like "*$HardwareId*" -and $_.Name -match '\(COM\d+\)' })
+
+    if ($candidates.Count -eq 0) { return $null }
+
+    $named = @($candidates | Where-Object { (Get-BusReportedName $_) -eq $ProductName })
+
+    if ($named.Count -eq 1) {
+        if ($named[0].Name -match '\((COM\d+)\)') { return $Matches[1] }
+        return $null
+    }
+
+    if ($named.Count -gt 1) {
+        Write-Log "нашлось несколько плат с именем '$ProductName' — беру первую; если не та, укажи -PortName COMx"
+        if ($named[0].Name -match '\((COM\d+)\)') { return $Matches[1] }
+        return $null
+    }
+
+    # Имя не подтвердилось. Два разных случая, и путать их нельзя.
+    if ($candidates.Count -eq 1) {
+        $seen = Get-BusReportedName $candidates[0]
+
+        # Имя прочиталось и оно чужое — значит, это соседняя плата (у неё тот же
+        # VID:PID), а нашей просто нет в системе. Брать её нельзя: демон вцепится
+        # в чужой порт и будет драться за него с соседним сервисом. Ровно это и
+        # случилось, когда порт выбирался первым попавшимся из двух.
+        if ($seen -and $seen -ne $ProductName) {
+            Write-LogOnce "единственная плата с $HardwareId называется '$seen' — это не наша, жду свою"
+            return $null
+        }
+
+        # Имя не прочиталось вовсе: свойство недоступно, или плату шили без
+        # --build-property и она снова зовётся «Arduino Leonardo». Кандидат
+        # один, деваться некуда — берём.
+        if ($candidates[0].Name -match '\((COM\d+)\)') {
+            Write-LogOnce "имя '$ProductName' не подтвердилось, но кандидат один — беру $($Matches[1])"
+            return $Matches[1]
+        }
+        return $null
+    }
+
+    $ports = ($candidates | ForEach-Object {
+        if ($_.Name -match '\((COM\d+)\)') { $Matches[1] } }) -join ', '
+    Write-LogOnce "плат с $HardwareId несколько ($ports), а имя '$ProductName' ни у одной не подтвердилось — укажи -PortName COMx"
     return $null
 }
 
@@ -191,12 +273,19 @@ function Invoke-Reboot {
 
 # --- основной цикл --------------------------------------------------------
 
-Write-Log "старт, ищу плату ($HardwareId)"
+if ($PortName) {
+    Write-Log "старт, порт задан вручную: $PortName"
+} else {
+    Write-Log "старт, ищу плату ($HardwareId, имя '$ProductName')"
+}
 
 while ($true) {
-    $portName = Find-BoardPort
+    $portName = if ($PortName) { $PortName } else { Find-BoardPort }
     if ($null -eq $portName) {
-        Write-Log 'плата не найдена, жду'
+        # Write-LogOnce, а не Write-Log: сюда попадаем каждые $RetrySec, а
+        # Write-Log ещё и сбрасывает глушитель — вдвоём они писали бы по паре
+        # строк в секунду и за ночь с выдернутой платой съедали лог ротацией.
+        Write-LogOnce 'плата не найдена, жду'
         Start-Sleep -Seconds $RetrySec
         continue
     }
