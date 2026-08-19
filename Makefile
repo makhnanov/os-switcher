@@ -15,6 +15,10 @@
 CLI     ?= /opt/arduino-ide/resources/app/lib/backend/resources/arduino-cli
 FQBN    ?= arduino:avr:leonardo
 SKETCH  ?= os-switcher-sketch
+# Имя платы в USB-дескрипторе (iProduct). По нему сервис отличает эту плату от
+# соседней off-screen: VID:PID у них общий (2341:8036), и больше их не
+# различает ничто. Собьётся имя — сервис перестанет находить свою плату.
+USB_PRODUCT ?= os-switcher
 PORT    ?= $(firstword $(wildcard /dev/ttyACM*))
 SERVICE ?= os-switcher-rebootd
 
@@ -22,8 +26,13 @@ SERVICE ?= os-switcher-rebootd
 
 all: flash
 
+# Оба флага обязательны. Без --build-property плата назовётся «Arduino
+# Leonardo», как соседняя, и сервис перестанет её опознавать. Без --clean
+# кешируется ядро (вместе с USBCore.cpp, где живёт имя), и arduino-cli молча
+# соберёт прошивку со старым именем — правку имени при этом видно не будет.
 build:
-	"$(CLI)" compile --fqbn $(FQBN) $(SKETCH)
+	"$(CLI)" compile --clean --fqbn $(FQBN) \
+		--build-property build.usb_product='"$(USB_PRODUCT)"' $(SKETCH)
 
 # Сервис держит порт открытым, а прошивка дёргает его на 1200 бод и ждёт
 # появления загрузчика — на время upload сервис останавливаем.
