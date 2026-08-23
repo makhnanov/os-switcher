@@ -284,8 +284,16 @@ if ($PortName) {
 }
 
 while ($true) {
-    $portName = if ($PortName) { $PortName } else { Find-BoardPort }
-    if ($null -eq $portName) {
+    # Переменная зовётся $target, а не $portName, и переименовывать её нельзя:
+    # PowerShell не различает регистр, так что $portName — это тот же параметр
+    # [string]$PortName. Типовое ограничение [string] молча превращает $null,
+    # вернувшийся из Find-BoardPort, в пустую строку, проверка ниже не
+    # срабатывает, и демон падает на New-Object («Значение PortName не может
+    # быть пустым»). Так он и умирал при каждом старте без платы — беззвучно,
+    # сразу после строки «старт», ни в логе, ни в журнале событий ничего.
+    # В off-screen эта переменная зовётся $target ровно поэтому.
+    $target = if ($PortName) { $PortName } else { Find-BoardPort }
+    if ([string]::IsNullOrEmpty($target)) {
         # Write-LogOnce, а не Write-Log: сюда попадаем каждые $RetrySec, а
         # Write-Log ещё и сбрасывает глушитель — вдвоём они писали бы по паре
         # строк в секунду и за ночь с выдернутой платой съедали лог ротацией.
@@ -294,17 +302,21 @@ while ($true) {
         continue
     }
 
-    $port = New-Object System.IO.Ports.SerialPort $portName, $Baud, 'None', 8, 'One'
-    $port.NewLine = "`n"
-    $port.ReadTimeout = $ReadTimeoutMs
-    $port.DtrEnable = $true   # без DTR плата не считает порт открытым и молчит
-
     $deadline = $null   # когда плата пришлёт REBOOT
     $shown = $null      # последнее показанное значение отсчёта
+    $port = $null
 
     try {
+        # Создание порта тоже внутри try: снаружи его исключение ловить некому,
+        # а $ErrorActionPreference = 'Stop' на этом месте убивает весь демон.
+        # Здесь же оно превращается в обычное «переоткрываю» и новый виток.
+        $port = New-Object System.IO.Ports.SerialPort $target, $Baud, 'None', 8, 'One'
+        $port.NewLine = "`n"
+        $port.ReadTimeout = $ReadTimeoutMs
+        $port.DtrEnable = $true   # без DTR плата не считает порт открытым и молчит
+
         $port.Open()
-        Write-Log "слушаю $portName"
+        Write-Log "слушаю $target"
 
         while ($true) {
             $text = ''
@@ -356,7 +368,10 @@ while ($true) {
         Hide-Countdown
         Start-Sleep -Seconds $RetrySec
     } finally {
-        if ($port.IsOpen) { $port.Close() }
-        $port.Dispose()
+        # $port может быть $null: сюда попадаем и когда упал сам New-Object.
+        if ($port) {
+            if ($port.IsOpen) { $port.Close() }
+            $port.Dispose()
+        }
     }
 }
