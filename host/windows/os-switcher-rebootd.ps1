@@ -364,7 +364,12 @@ while ($true) {
             }
         }
     } catch {
-        Write-Log "порт отвалился ($($_.Exception.Message)), переоткрываю"
+        # Write-LogOnce, а не Write-Log: пока порт занят или его нет, сюда
+        # прилетает одно и то же каждые $RetrySec — за ночь это мегабайты, а
+        # ротация съедает всё, что было до. Успешное открытие пишется через
+        # Write-Log («слушаю»), а он сбрасывает глушитель, так что следующий
+        # отвал опишется заново.
+        Write-LogOnce "порт отвалился ($($_.Exception.Message)), переоткрываю"
         Hide-Countdown
         Start-Sleep -Seconds $RetrySec
     } finally {
