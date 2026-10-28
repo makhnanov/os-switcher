@@ -199,11 +199,20 @@ def serve(port, notifier):
 
 def main():
     notifier = Notifier()
+    # Плата может пропасть с шины на часы (выдернули; или USB-порт перестал её
+    # энумерировать сам), а цикл крутится раз в RETRY_SEC. Без этого флага в
+    # журнал уходят десятки тысяч одинаковых строк, и в них тонет единственная
+    # важная — та, что говорит, почему порт отвалился. Поэтому жалуемся один
+    # раз, а о возвращении платы скажет "слушаю ..." из serve().
+    complained = False
     while True:
         port = find_port()
         if port is None:
-            log(f"плата не найдена ({PORT_GLOB}), жду")
+            if not complained:
+                log(f"плата не найдена ({PORT_GLOB}), жду")
+                complained = True
         else:
+            complained = False
             try:
                 serve(port, notifier)
                 return 0
