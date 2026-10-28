@@ -35,7 +35,7 @@ import time
 import serial
 
 PORT_GLOB = os.environ.get(
-    "OS_SWITCHER_PORT_GLOB", "/dev/serial/by-id/*Arduino*Leonardo*"
+    "OS_SWITCHER_PORT_GLOB", "/dev/serial/by-id/*os-switcher*"
 )
 BAUD = int(os.environ.get("OS_SWITCHER_BAUD", "9600"))
 REBOOT_CMD = shlex.split(os.environ.get("OS_SWITCHER_REBOOT_CMD", "systemctl reboot"))

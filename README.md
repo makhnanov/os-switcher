@@ -177,12 +177,36 @@ CLI=/opt/arduino-ide/resources/app/lib/backend/resources/arduino-cli
 # узнать порт
 "$CLI" board list
 
-# собрать
-"$CLI" compile --fqbn arduino:avr:leonardo os-switcher-sketch
+# собрать (оба флага обязательны, см. ниже)
+"$CLI" compile --clean --fqbn arduino:avr:leonardo \
+    --build-property build.usb_product='"os-switcher"' os-switcher-sketch
 
 # прошить (порт подставить свой)
 "$CLI" upload -p /dev/ttyACM0 --fqbn arduino:avr:leonardo os-switcher-sketch
 ```
+
+### Своё имя в USB-дескрипторе
+
+`build.usb_product` подставляет имя платы в поле `iProduct`, из которого udev
+строит путь:
+
+```
+/dev/serial/by-id/usb-Arduino_LLC_os-switcher_C-if00
+```
+
+По нему сервис плату и ищет. Без этого имени плата называется «Arduino
+Leonardo», как любая другая на ATmega32u4, и шаблон поиска цепляет первую
+попавшуюся — включая совершенно постороннюю Arduino, воткнутую в ту же машину.
+Проверено на практике: сервис молча слушал не ту плату и не сообщал об этом
+ничем.
+
+`--clean` рядом обязателен: ядро Arduino кешируется отдельно от скетча, а имя
+зашивается именно в нём. Без чистки сборка пройдёт успешно и тихо оставит
+старое имя.
+
+Имя — свойство **прошивки**, не кристалла: две платы, собранные из этих
+исходников, между собой неразличимы. Если такое понадобится, придётся отдавать
+по serial уникальный номер чипа из signature row.
 
 ## Про светодиоды на Pro Micro (важно!)
 
